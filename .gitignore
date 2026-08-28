@@ -1,0 +1,27 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Local tooling & scratch ---
+.claude/
+.vscode/
+.mini_pi_demo/
+.tmp/
+
+# --- Secrets / environment ---
+.env
+.env.*
+!.env.example
