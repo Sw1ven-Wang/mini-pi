@@ -1,0 +1,14 @@
+[
+  {"id":"single_file_bug","category":"single-file bug fix","goal":"Fix an arithmetic operator while preserving the signature"},
+  {"id":"multi_file_rename","category":"multi-file API rename","goal":"Rename an internal API and update all callers"},
+  {"id":"create_feature","category":"new feature","goal":"Create a small validation helper and tests"},
+  {"id":"delete_obsolete","category":"delete","goal":"Delete an obsolete module after checking references"},
+  {"id":"move_imports","category":"move and imports","goal":"Move a module and update imports"},
+  {"id":"multiple_failures","category":"multiple failing tests","goal":"Repair multiple related test failures"},
+  {"id":"lint_regression","category":"lint regression","goal":"Fix behavior without introducing lint errors"},
+  {"id":"no_match","category":"NO_MATCH recovery","goal":"Recover from a stale exact replacement"},
+  {"id":"external_stale","category":"STALE recovery","goal":"Handle an external file change before mutation"},
+  {"id":"verify_repair","category":"verification repair","goal":"Use a failed verification to drive a second edit"},
+  {"id":"protected_file","category":"user constraint","goal":"Complete the task without modifying a protected file"},
+  {"id":"compat_wrapper","category":"compatibility","goal":"Rename an internal API while preserving the public wrapper"}
+]

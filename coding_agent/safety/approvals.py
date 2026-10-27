@@ -9,6 +9,7 @@ from agent.approvals import (
     ApprovalHandler,
     ApprovalRequest,
 )
+from coding_agent.observability.redaction import redact_text
 
 
 class CLIApprovalHandler(
@@ -34,19 +35,29 @@ class CLIApprovalHandler(
             f"原因: {request.reason}"
         )
 
-        print(
-            f"参数: {request.arguments}"
-        )
+        if request.summary:
+            print(f"操作: {redact_text(request.summary)}")
+        if request.risk:
+            print(f"风险: {request.risk}")
+        if request.normalized_targets:
+            print(
+                "目标: "
+                + ", ".join(redact_text(item) for item in request.normalized_targets)
+            )
+        print(f"规则: {', '.join(request.matched_rule_ids or [request.rule_id])}")
 
         answer = await asyncio.to_thread(
             input,
-            "是否允许？[y/N]: ",
+            "是否允许？[y=一次/s=本会话/N]: ",
         )
 
         if answer.strip().lower() in {
             "y",
             "yes",
         }:
-            return ApprovalDecision.APPROVE
+            return ApprovalDecision.APPROVE_ONCE
+
+        if answer.strip().lower() in {"s", "session"}:
+            return ApprovalDecision.APPROVE_SESSION
 
         return ApprovalDecision.DENY

@@ -31,7 +31,6 @@ from coding_agent.filesystem.snapshots import (
 )
 
 from coding_agent.filesystem.versions import (
-    FileVersion,
     same_version,
     version_of_file,
 )
@@ -39,6 +38,11 @@ from coding_agent.filesystem.versions import (
 from coding_agent.filesystem.workspace import Workspace
 from coding_agent.filesystem.mutation_queue import (
     FileMutationQueue,
+)
+from coding_agent.errors import StaleVersionError
+from coding_agent.observations import (
+    VersionResolver,
+    resolve_tool_version,
 )
 
 class EditTool(AgentTool):
@@ -48,7 +52,8 @@ class EditTool(AgentTool):
     description = (
         "对同一个文件执行一个或多个精确文本替换。"
         "每个 old_text 必须在原始文件快照中唯一匹配，"
-        "多个 edits 不允许重叠。"
+        "多个 edits 不允许重叠。文件版本由 Host 管理，"
+        "修改前应先 read。"
     )
 
     parameters = {
@@ -77,10 +82,6 @@ class EditTool(AgentTool):
                     ],
                 },
             },
-            "expected_version": {
-                "type": "object",
-                "description": "之前读取文件时获得的版本",
-            },
         },
         "required": [
             "path",
@@ -97,10 +98,13 @@ class EditTool(AgentTool):
         workspace: Workspace,
         mutation_queue: FileMutationQueue,
         checkpoint_store: CheckpointStore,
+        *,
+        version_resolver: VersionResolver | None = None,
     ) -> None:
         self.workspace = workspace
         self.mutation_queue = mutation_queue
         self.checkpoint_store = checkpoint_store
+        self.version_resolver = version_resolver
 
     async def execute(
         self,
@@ -125,6 +129,14 @@ class EditTool(AgentTool):
             ExactReplacement.model_validate(item)
             for item in raw_edits
         ]
+
+        expected_version = resolve_tool_version(
+            path=path,
+            explicit_version=arguments.get("expected_version"),
+            resolver=self.version_resolver,
+            argument_name="expected_version",
+            legacy_optional=True,
+        )
 
         # --------------------------------------------------
         # 2. Workspace 路径检查
@@ -152,22 +164,14 @@ class EditTool(AgentTool):
             # 4. stale version 检查
             # --------------------------------------------------
 
-            expected_version_data = arguments.get(
-                "expected_version"
-            )
-
-            if expected_version_data is not None:
-
-                expected_version = FileVersion.model_validate(
-                    expected_version_data
-                )
-
+            if expected_version is not None:
                 if not same_version(
                     old_version,
                     expected_version,
                 ):
-                    raise RuntimeError(
-                        "文件版本已变化，请重新读取文件"
+                    raise StaleVersionError(
+                        expected=expected_version.digest,
+                        current=old_version.digest,
                     )
 
             # --------------------------------------------------

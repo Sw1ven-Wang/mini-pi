@@ -9,6 +9,11 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+node_modules/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
 
 # --- Virtual environments ---
 .venv/
@@ -19,9 +24,26 @@ env/
 .claude/
 .vscode/
 .mini_pi_demo/
+.mini_pi/*
+!.mini_pi/settings.json
 .tmp/
+.tmp_v11*/
+.tmp_v111*.xml
+.tmp_ci/
+.tmp_publication*/
+.codex/
+python-results.xml
+l2-results.xml
+runtime.db
+runtime.db-wal
+runtime.db-shm
+writer.lock
 
 # --- Secrets / environment ---
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx

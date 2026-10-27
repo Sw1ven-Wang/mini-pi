@@ -5,9 +5,19 @@ from pathlib import Path
 import pytest
 
 from agent.tool_registry import ToolRegistry
+from coding_agent.changes.checkpoint import CheckpointStore
+from coding_agent.filesystem.mutation_queue import FileMutationQueue
 from coding_agent.filesystem.workspace import Workspace
 from coding_agent.tools.read import ReadTool
 from coding_agent.tools.write import WriteTool
+
+
+def _write_tool(workspace: Workspace) -> WriteTool:
+    return WriteTool(
+        workspace,
+        mutation_queue=FileMutationQueue(),
+        checkpoint_store=CheckpointStore(),
+    )
 
 
 def test_registry_registers_tools(
@@ -16,7 +26,7 @@ def test_registry_registers_tools(
     workspace = Workspace(tmp_path)
 
     read_tool = ReadTool(workspace)
-    write_tool = WriteTool(workspace)
+    write_tool = _write_tool(workspace)
 
     registry = ToolRegistry(
         [
@@ -73,7 +83,7 @@ def test_registry_exports_tool_definitions(
     registry = ToolRegistry(
         [
             ReadTool(workspace),
-            WriteTool(workspace),
+            _write_tool(workspace),
         ]
     )
 

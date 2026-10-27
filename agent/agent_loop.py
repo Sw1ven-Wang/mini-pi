@@ -30,6 +30,7 @@ from ai.events import StreamEnd, StreamError
 from ai.messages import AssistantMessage
 from ai.models import Model
 from ai.providers.base import Provider
+from .hooks import AgentBudget, AgentLoopObserver
 from .tool_dispatcher import ToolDispatcher
 
 class AgentLoopError(RuntimeError):
@@ -85,6 +86,8 @@ async def run_agent_loop(
     context: Context,
     tool_dispatcher: ToolDispatcher,
     max_turns: int = 20,
+    observer: AgentLoopObserver | None = None,
+    budget: AgentBudget | None = None,
 ) -> AssistantMessage:
     """运行最小 Agent Loop。
 
@@ -134,17 +137,24 @@ async def run_agent_loop(
     if max_turns <= 0:
         raise ValueError("max_turns 必须大于 0")
 
+    if budget is not None:
+        tool_dispatcher.set_budget(budget)
+
     for _turn in range(max_turns):
+        if budget is not None:
+            budget.consume_turn()
+            budget.consume_model_call()
         # --------------------------------------------------
         # 1. 调用模型，得到这一轮完整 AssistantMessage
         # --------------------------------------------------
 
-        assistant = await _stream_assistant_response(
+        request = _stream_assistant_response(
             provider=provider,
             model=model,
             context=context,
             tool_dispatcher=tool_dispatcher,
         )
+        assistant = await budget.run(request) if budget is not None else await request
 
         # --------------------------------------------------
         # 2. AssistantMessage 必须进入对话历史
@@ -171,6 +181,12 @@ async def run_agent_loop(
 
         context.messages.append(assistant)
 
+        if observer is not None:
+            await observer.on_context_updated(
+                context,
+                turn_index=_turn + 1,
+            )
+
         # --------------------------------------------------
         # 3. 没有 ToolCall → Agent 完成
         # --------------------------------------------------
@@ -191,16 +207,26 @@ async def run_agent_loop(
         # 或 TaskGroup，实现 Pi 风格并行 Tool execution。
         # --------------------------------------------------
 
-        for tool_call in assistant.tool_calls:
-            result = await tool_dispatcher.dispatch(
-                tool_call
-            )
+        tool_request = tool_dispatcher.dispatch_many(assistant.tool_calls)
+        results = (
+            await budget.run(tool_request)
+            if budget is not None
+            else await tool_request
+        )
+
+        for result in results:
 
             # ----------------------------------------------
             # 5. ToolResultMessage 回写 Context
             # ----------------------------------------------
 
             context.messages.append(result)
+
+            if observer is not None:
+                await observer.on_context_updated(
+                    context,
+                    turn_index=_turn + 1,
+                )
 
         # --------------------------------------------------
         # 6. 回到 for 循环顶部

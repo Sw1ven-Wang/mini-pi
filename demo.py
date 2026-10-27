@@ -1,12 +1,13 @@
-"""Mini-Pi Bash E2E demo.
+"""Mini-Pi V5 E2E demo：Complete Filesystem Mutations。
 
 验证完整的 Coding Agent 闭环：
 
-1. Bash 运行 pytest 并观察失败
-2. ReadTool 读取目标文件
-3. EditTool 修复 add 函数
-4. Bash 再次运行 pytest 并确认通过
-5. Host 独立验证最终文件、BOM、CRLF 和 pytest 结果
+1. glob / search / read 定位问题
+2. move 重命名 legacy_math.py → math_utils.py
+3. patch 更新 service.py import
+4. delete 删除废弃的 unused.py
+5. VerificationPipeline 运行 pytest
+6. Host 独立验证最终状态
 """
 
 import asyncio
@@ -29,16 +30,62 @@ from coding_agent.changes.checkpoint import CheckpointStore
 from coding_agent.filesystem.mutation_queue import FileMutationQueue
 from coding_agent.filesystem.workspace import Workspace
 from coding_agent.process.runner import ProcessRunner
+from coding_agent.process.shell import powershell_config
 from coding_agent.safety.approvals import CLIApprovalHandler
-from coding_agent.safety.permissions import CodingPermissionEngine
-from coding_agent.tools.bash import BashTool
-from coding_agent.tools.edit import EditTool
+from coding_agent.safety.factory import permission_engine_from_workspace
+from coding_agent.sandbox.factory import sandbox_from_settings
+from coding_agent.tools.delete import DeleteTool
+from coding_agent.tools.glob import GlobTool
+from coding_agent.tools.move import MoveTool
+from coding_agent.tools.patch import PatchTool
+from coding_agent.tools.powershell import PowerShellTool
 from coding_agent.tools.read import ReadTool
+from coding_agent.tools.search import SearchTool
+from coding_agent.verification.pipeline import VerificationPipeline
+from coding_agent.verification.presets import pytest_verifier
+
+
+def _reset_demo_project(demo_root: Path) -> None:
+    """每次运行都恢复固定的 V5 演示项目状态。"""
+
+    src = demo_root / "src"
+    tests = demo_root / "tests"
+    src.mkdir(exist_ok=True)
+    tests.mkdir(exist_ok=True)
+
+    (src / "legacy_math.py").write_text(
+        "def add(a, b):\n"
+        "    return a + b\n",
+        encoding="utf-8",
+    )
+
+    (src / "service.py").write_text(
+        "from src.legacy_math import add\n"
+        "\n"
+        "\n"
+        "def total(a, b):\n"
+        "    return add(a, b)\n",
+        encoding="utf-8",
+    )
+
+    (src / "unused.py").write_text(
+        "# deprecated\n",
+        encoding="utf-8",
+    )
+
+    (tests / "test_service.py").write_text(
+        "from src.service import total\n"
+        "\n"
+        "\n"
+        "def test_total():\n"
+        "    assert total(2, 3) == 5\n",
+        encoding="utf-8",
+    )
 
 
 async def main() -> None:
     # ==================================================
-    # 1. 创建独立 Demo Workspace 和失败测试 fixture
+    # 1. Demo Workspace + fixture
     # ==================================================
 
     project_root = Path.cwd()
@@ -47,19 +94,7 @@ async def main() -> None:
 
     print(f"[Demo Workspace] {demo_root}")
 
-    math_file = demo_root / "test1_2.py"
-
-    # 每次运行都恢复固定的失败状态。
-    # fixture 故意使用 UTF-8 BOM + CRLF，验证 EditTool 保持格式。
-    math_file.write_bytes(
-        b"\xef\xbb\xbf"
-        b"def add(a, b):\r\n"
-        b"    return a - b\r\n"
-        b"\r\n"
-        b"\r\n"
-        b"def test_add():\r\n"
-        b"    assert add(2, 3) == 5\r\n"
-    )
+    _reset_demo_project(demo_root)
 
     # ==================================================
     # 2. Provider
@@ -90,26 +125,41 @@ async def main() -> None:
     process_runner = ProcessRunner()
     mutation_queue = FileMutationQueue()
     checkpoint_store = CheckpointStore()
-    permission_engine = CodingPermissionEngine()
+    permission_engine = permission_engine_from_workspace(
+        demo_root, provider=provider, model=model,
+    )
     approval_handler = CLIApprovalHandler()
 
     # ==================================================
     # 4. Tools
     # ==================================================
 
-    read_tool = ReadTool(
-        workspace=workspace,
-    )
-
-    edit_tool = EditTool(
+    glob_tool = GlobTool(workspace=workspace)
+    search_tool = SearchTool(workspace=workspace)
+    read_tool = ReadTool(workspace=workspace)
+    patch_tool = PatchTool(
         workspace=workspace,
         mutation_queue=mutation_queue,
         checkpoint_store=checkpoint_store,
     )
-
-    bash_tool = BashTool(
+    move_tool = MoveTool(
+        workspace=workspace,
+        mutation_queue=mutation_queue,
+        checkpoint_store=checkpoint_store,
+    )
+    delete_tool = DeleteTool(
+        workspace=workspace,
+        mutation_queue=mutation_queue,
+        checkpoint_store=checkpoint_store,
+    )
+    powershell_tool = PowerShellTool(
         workspace=workspace,
         process_runner=process_runner,
+        sandbox=sandbox_from_settings(
+            permission_engine.settings.sandbox,
+            process_runner=process_runner,
+            shell_config=powershell_config(),
+        ),
     )
 
     # ==================================================
@@ -118,9 +168,13 @@ async def main() -> None:
 
     registry = ToolRegistry(
         [
+            glob_tool,
+            search_tool,
             read_tool,
-            edit_tool,
-            bash_tool,
+            patch_tool,
+            move_tool,
+            delete_tool,
+            powershell_tool,
         ]
     )
 
@@ -137,23 +191,33 @@ async def main() -> None:
     context = Context(
         system_prompt=(
             "你是一个 coding agent。"
-            "处理真实文件时必须使用提供的工具，不能猜测。"
-            "修改已存在的文件时，必须先 read，再使用 edit。"
-            "必须通过 bash 实际运行测试来判断修复是否成功。"
+            "当前环境是 Windows。"
+            "创建新文件优先使用 write。"
+            "修改已有文件优先使用 edit/patch。"
+            "删除文件必须使用 delete，不要使用 PowerShell Remove-Item。"
+            "移动或重命名文件必须使用 move，不要使用 PowerShell Move-Item。"
+            "仓库定位优先 glob/search/read。"
+            "PowerShell 主要用于测试、lint、build 等命令。"
+            "执行命令必须使用 powershell 工具，"
+            "不要使用 Bash/Linux 专属命令。"
         ),
         messages=[
             UserMessage(
                 content=(
-                    "请修复 test1_2.py 中导致测试失败的问题。\n"
+                    "将 legacy_math.py 重命名为 math_utils.py，"
+                    "更新所有引用，"
+                    "删除明确标记为废弃的 unused.py，"
+                    "然后运行全部测试。\n"
                     "要求：\n"
-                    "1. 先使用 bash 执行："
-                    "uv run pytest test1_2.py -q\n"
-                    "2. 如果测试失败，读取 test1_2.py。\n"
-                    "3. 使用 edit 修复 add 函数，"
-                    "使其正确返回两个参数之和。\n"
-                    "4. 修改后再次使用 bash 执行："
-                    "uv run pytest test1_2.py -q\n"
-                    "5. 只有确认测试通过后，才能报告任务完成。"
+                    "1. 使用 glob 定位所有 Python 文件。\n"
+                    "2. 使用 search 搜索 legacy_math 的引用。\n"
+                    "3. 使用 read 读取相关文件获取版本。\n"
+                    "4. 使用 move 重命名 legacy_math.py。\n"
+                    "5. 使用 patch 更新 service.py 的 import。\n"
+                    "6. 使用 delete 删除 unused.py。\n"
+                    "7. 使用 powershell 运行："
+                    "uv run python -m pytest -q\n"
+                    "8. 只有测试通过后才报告完成。"
                 )
             ),
         ],
@@ -173,14 +237,14 @@ async def main() -> None:
             model=model,
             context=context,
             tool_dispatcher=dispatcher,
-            max_turns=15,
+            max_turns=25,
         )
     except AgentLoopError as exc:
         print(f"[Agent Error] {exc}")
         return
 
     # ==================================================
-    # 8. Final Answer 和 Message History
+    # 8. Final Answer
     # ==================================================
 
     print()
@@ -189,88 +253,62 @@ async def main() -> None:
     print("=" * 60)
     print(final_message.content)
 
-    print()
-    print("=" * 60)
-    print("MESSAGE HISTORY")
-    print("=" * 60)
-
-    for index, message in enumerate(context.messages):
-        print()
-        print(f"[{index}] {type(message).__name__}")
-        print(message)
-
     # ==================================================
-    # 9. Host 独立验证磁盘结果
+    # 9. Host 独立验证：VerificationPipeline + 磁盘状态
     # ==================================================
 
     print()
     print("=" * 60)
-    print("DISK VERIFICATION")
+    print("HOST VERIFICATION")
     print("=" * 60)
-    print(f"[Target File] {math_file.resolve()}")
 
-    math_bytes = math_file.read_bytes()
-    text = (
-        math_bytes
-        .decode("utf-8-sig")
-        .replace("\r\n", "\n")
+    # 磁盘状态断言。
+    assert not (demo_root / "src" / "legacy_math.py").exists(), (
+        "legacy_math.py 仍存在"
+    )
+    assert (demo_root / "src" / "math_utils.py").exists(), (
+        "math_utils.py 不存在"
+    )
+    assert not (demo_root / "src" / "unused.py").exists(), (
+        "unused.py 仍存在"
+    )
+    assert (
+        "from src.math_utils import add"
+        in (demo_root / "src" / "service.py").read_text()
+    ), "service.py import 未更新"
+
+    print("[PASS] 磁盘状态正确")
+
+    verification_pipeline = VerificationPipeline(
+        [
+            pytest_verifier(
+                process_runner,
+                powershell_config(),
+                command="uv run python -m pytest -q",
+            )
+        ]
+    )
+
+    summary = await verification_pipeline.run(
+        workspace=workspace
     )
 
     print()
-    print("[Final File Content]")
-    print(text)
+    print(f"[Summary] passed={summary.passed}")
 
-    assert "return a + b" in text, (
-        "add 函数没有改为加法"
-    )
-    assert "return a - b" not in text, (
-        "add 函数仍然包含错误的减法实现"
-    )
-    assert "assert add(2, 3) == 5" in text, (
-        "测试断言被意外修改"
-    )
+    for result in summary.results:
+        print(f"  [{result.name}] passed={result.passed} "
+              f"exit_code={result.exit_code}")
 
-    print("[PASS] add 函数修复成功")
-
-    bom = b"\xef\xbb\xbf"
-    assert math_bytes.startswith(bom), (
-        "EditTool 修改后 UTF-8 BOM 丢失"
+    assert summary.passed is True, (
+        "Agent 最终没有让 verification 全部通过\n"
+        + "\n".join(
+            f"{r.name}:\n{r.stdout}\n{r.stderr}"
+            for r in summary.results
+        )
     )
 
-    print("[PASS] UTF-8 BOM 保持")
-
-    payload = math_bytes[len(bom):]
-    assert b"\r\n" in payload, (
-        "EditTool 修改后 CRLF 丢失"
-    )
-    assert b"\n" not in payload.replace(b"\r\n", b""), (
-        "文件中出现非 CRLF 的 LF"
-    )
-
-    print("[PASS] CRLF 保持")
-
-    verification = await process_runner.run(
-        "uv run pytest test1_2.py -q",
-        cwd=demo_root,
-        timeout_seconds=30,
-    )
-
-    print()
-    print("[Host Verification]")
-
-    if verification.stdout:
-        print(verification.stdout)
-
-    if verification.stderr:
-        print(verification.stderr)
-
-    assert verification.exit_code == 0, (
-        "Agent 最终没有真正修复测试\n"
-        f"stdout:\n{verification.stdout}\n"
-        f"stderr:\n{verification.stderr}"
-    )
-
-    print("[PASS] Final pytest passed")
+    print("[PASS] Verification pipeline passed")
 
     # ==================================================
     # 10. 全部完成
@@ -278,7 +316,7 @@ async def main() -> None:
 
     print()
     print("=" * 60)
-    print("ALL BASH E2E CHECKS PASSED")
+    print("ALL V5 E2E CHECKS PASSED")
     print("=" * 60)
 
 

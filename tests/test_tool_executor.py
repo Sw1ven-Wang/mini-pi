@@ -4,13 +4,25 @@ import asyncio
 from pathlib import Path
 
 from ai.messages import ToolCall
+from agent.tool_dispatcher import ToolDispatcher
 from agent.tool_executor import ToolExecutor
+from agent.tool_registry import ToolRegistry
+
+from coding_agent.filesystem.workspace import Workspace
+from coding_agent.safety.permissions import CodingPermissionEngine
 from coding_agent.tools.read import ReadTool
 
 
 def _run(coro):
-    """运行一个 async coroutine。"""
     return asyncio.run(coro)
+
+
+def _executor(tool) -> ToolExecutor:
+    dispatcher = ToolDispatcher(
+        registry=ToolRegistry([tool]),
+        permission_engine=CodingPermissionEngine(),
+    )
+    return ToolExecutor(dispatcher)
 
 
 def test_execute_read_tool_success(tmp_path: Path):
@@ -19,15 +31,12 @@ def test_execute_read_tool_success(tmp_path: Path):
     file_path = tmp_path / "hello.txt"
     file_path.write_text("hello mini pi", encoding="utf-8")
 
-    read_tool = ReadTool(tmp_path)
-    executor = ToolExecutor([read_tool])
+    executor = _executor(ReadTool(Workspace(tmp_path)))
 
     tool_call = ToolCall(
         id="call_1",
         name="read",
-        arguments={
-            "path": "hello.txt",
-        },
+        arguments={"path": "hello.txt"},
     )
 
     result = _run(executor.execute(tool_call))
@@ -41,7 +50,7 @@ def test_execute_read_tool_success(tmp_path: Path):
 def test_execute_unknown_tool():
     """工具不存在时，不应抛异常，而应返回错误 ToolResultMessage。"""
 
-    executor = ToolExecutor([])
+    executor = _executor(ReadTool(Workspace(Path.cwd())))
 
     tool_call = ToolCall(
         id="call_2",
@@ -60,15 +69,12 @@ def test_execute_unknown_tool():
 def test_execute_tool_exception_becomes_error_result(tmp_path: Path):
     """具体工具抛异常时，ToolExecutor 应转换为错误结果。"""
 
-    read_tool = ReadTool(tmp_path)
-    executor = ToolExecutor([read_tool])
+    executor = _executor(ReadTool(Workspace(tmp_path)))
 
     tool_call = ToolCall(
         id="call_3",
         name="read",
-        arguments={
-            "path": "missing.txt",
-        },
+        arguments={"path": "missing.txt"},
     )
 
     result = _run(executor.execute(tool_call))
@@ -82,8 +88,7 @@ def test_execute_tool_exception_becomes_error_result(tmp_path: Path):
 def test_execute_missing_argument_becomes_error_result(tmp_path: Path):
     """缺少必要参数时，也应由 ToolExecutor 捕获并转为错误结果。"""
 
-    read_tool = ReadTool(tmp_path)
-    executor = ToolExecutor([read_tool])
+    executor = _executor(ReadTool(Workspace(tmp_path)))
 
     tool_call = ToolCall(
         id="call_4",

@@ -5,15 +5,19 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ApprovalDecision(
     str,
     Enum,
 ):
-    APPROVE = "approve"
+    APPROVE_ONCE = "approve_once"
+    APPROVE_SESSION = "approve_session"
     DENY = "deny"
+
+    # Backward-compatible alias. New handlers should return APPROVE_ONCE.
+    APPROVE = "approve_once"
 
 
 class ApprovalRequest(BaseModel):
@@ -24,6 +28,12 @@ class ApprovalRequest(BaseModel):
 
     reason: str
     rule_id: str
+    matched_rule_ids: list[str] = Field(default_factory=list)
+    risk: str | None = None
+    normalized_targets: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    command_hash: str | None = None
+    preview_id: str | None = None
 
 
 class ApprovalHandler(Protocol):

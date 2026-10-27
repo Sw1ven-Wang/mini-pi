@@ -16,8 +16,12 @@ requires-python = ">=3.11"                # 要求 Python 版本不低于 3.11
 # dependencies —— 运行本项目必需的第三方库
 # 写法 "库名>=版本号" 表示：安装该库，且版本必须 >= 指定版本
 dependencies = [
+    "fastapi>=0.115",
     "openai>=3.2.0",
     "pydantic>=2.0",   # 数据校验/模型库，用于定义结构化数据
+    "tree-sitter>=0.25,<0.26",
+    "tree-sitter-bash>=0.25,<0.26",
+    "uvicorn>=0.34",
 ]
 
 # ------------------------------------------------------------
@@ -26,6 +30,7 @@ dependencies = [
 # ------------------------------------------------------------
 [project.optional-dependencies]
 dev = [
+    "httpx>=0.28",
     "pytest>=8.0",          # 单元测试框架
     "pytest-asyncio>=0.23", # pytest 的异步插件，支持测试 async 函数
 ]
@@ -43,8 +48,13 @@ build-backend = "setuptools.build_meta"   # 实际执行构建的后端
 # 这些选项会被 pytest 自动读取（相当于 pytest.ini 里的内容）
 # ------------------------------------------------------------
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 asyncio_mode = "auto"   # 自动处理 async 测试，无需手动写装饰器
 addopts = "--basetemp=.tmp -v"  # 指定临时目录
+markers = [
+    "real_model: opt-in smoke tests that make paid external model calls",
+    "container_runtime: opt-in Docker/Podman L2 integration tests",
+]
 [tool.uv.workspace]
 members = [
     "mini-pi",
@@ -52,9 +62,10 @@ members = [
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28",
     "pytest>=9.1.1",
+    "pytest-asyncio>=0.23",
 ]
 #告诉 uv 这只是一个应用项目，不需要打包自己
 [tool.uv]
 package = false
-

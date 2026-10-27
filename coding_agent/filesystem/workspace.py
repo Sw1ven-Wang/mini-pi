@@ -91,6 +91,14 @@ class Workspace:
                 f"path 必须是 workspace 相对路径: {raw}"
             )
 
+        reserved = {"CON", "PRN", "AUX", "NUL"}
+        reserved.update(f"COM{index}" for index in range(1, 10))
+        reserved.update(f"LPT{index}" for index in range(1, 10))
+        for component in windows_path.parts:
+            device_name = component.rstrip(" .").split(".", 1)[0].upper()
+            if device_name in reserved:
+                raise ValueError(f"path 包含 Windows 保留设备名: {component}")
+
         # --------------------------------------------------
         # 组合 workspace root，然后 resolve。
         #

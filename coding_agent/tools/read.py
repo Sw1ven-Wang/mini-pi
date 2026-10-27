@@ -15,6 +15,11 @@ from coding_agent.filesystem.snapshots import (
     snapshot_file,
 )
 
+from coding_agent.errors import (
+    FileNotFoundAgentError,
+    InvalidArgumentError,
+)
+
 
 class ReadTool(AgentTool):
     """读取指定路径的 UTF-8 文本文件。"""
@@ -61,7 +66,7 @@ class ReadTool(AgentTool):
         )
 
         if not path:
-            raise ValueError(
+            raise InvalidArgumentError(
                 "缺少参数: path"
             )
 
@@ -72,8 +77,8 @@ class ReadTool(AgentTool):
 
 
         if not file_path.exists():
-            raise FileNotFoundError(
-                f"文件不存在: {file_path}"
+            raise FileNotFoundAgentError(
+                path
             )
 
 

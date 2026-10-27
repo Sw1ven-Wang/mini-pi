@@ -11,6 +11,7 @@ from coding_agent.filesystem.versions import (
     same_version,
     version_of_file,
 )
+from coding_agent.testing.fault_injection import NoopFaultInjector
 
 
 class StaleFileError(RuntimeError):
@@ -20,6 +21,8 @@ class StaleFileError(RuntimeError):
 def atomic_write_bytes(
     path: Path,
     data: bytes,
+    *,
+    fault_injector=None,
 ) -> None:
     """原子写入原始 bytes。
 
@@ -55,6 +58,7 @@ def atomic_write_bytes(
                 f.fileno()
             )
 
+        (fault_injector or NoopFaultInjector()).maybe_fail("before_atomic_replace")
         os.replace(
             temp_path,
             path,
@@ -70,6 +74,7 @@ def atomic_write_bytes_checked(
     data: bytes,
     *,
     expected_version: FileVersion,
+    fault_injector=None,
 ) -> None:
     """带版本保护的原子写入。
 
@@ -139,6 +144,7 @@ def atomic_write_bytes_checked(
         # 3. 版本仍一致才真正替换
         # ------------------------------------------
 
+        (fault_injector or NoopFaultInjector()).maybe_fail("before_atomic_replace")
         os.replace(
             temp_path,
             path,

@@ -37,6 +37,8 @@ def bash_config() -> ShellConfig:
         shell_type=ShellType.BASH,
         executable="bash",
         args=(
-            "-lc",
+            "--noprofile",
+            "--norc",
+            "-c",
         ),
     )

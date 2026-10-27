@@ -11,11 +11,17 @@ from agent.tools import (
 )
 
 from coding_agent.errors import (
+    CommandPolicyBlockedError,
     InvalidArgumentError,
     ProcessTimeoutError,
 )
 from coding_agent.filesystem.workspace import Workspace
 from coding_agent.process.runner import ProcessRunner
+from coding_agent.process.shell import bash_config
+from coding_agent.safety.command_policy import CommandDecisionType, CommandPolicy
+from coding_agent.safety.shell_ir import ShellKind
+from coding_agent.sandbox.base import Sandbox
+from coding_agent.sandbox.local import LocalSandbox
 
 
 class BashTool(AgentTool):
@@ -38,6 +44,7 @@ class BashTool(AgentTool):
         "properties": {
             "command": {
                 "type": "string",
+                "maxLength": 100000,
                 "description": "要执行的 shell 命令",
             },
             "cwd": {
@@ -68,9 +75,17 @@ class BashTool(AgentTool):
         self,
         workspace: Workspace,
         process_runner: ProcessRunner,
+        command_policy: CommandPolicy | None = None,
+        sandbox: Sandbox | None = None,
     ) -> None:
         self.workspace = workspace
         self.process_runner = process_runner
+        self.shell_config = bash_config()
+        self.command_policy = command_policy or CommandPolicy(shell=ShellKind.BASH)
+        self.sandbox = sandbox or LocalSandbox(
+            process_runner=process_runner,
+            shell_config=self.shell_config,
+        )
 
     async def execute(
         self,
@@ -104,9 +119,20 @@ class BashTool(AgentTool):
         if (
             not isinstance(command, str)
             or not command.strip()
+            or "\x00" in command
+            or len(command.encode("utf-8")) > 100_000
         ):
             raise InvalidArgumentError(
-                "command 不能为空"
+                "command 不能为空、包含 NUL 或超过 100000 bytes"
+            )
+
+        policy_decision = self.command_policy.evaluate(command)
+        if policy_decision.decision == CommandDecisionType.DENY:
+            raise CommandPolicyBlockedError(
+                risk=policy_decision.risk.value,
+                rule_id=policy_decision.rule_id,
+                reason=policy_decision.reason,
+                suggestion=policy_decision.suggestion,
             )
 
         if (
@@ -150,12 +176,15 @@ class BashTool(AgentTool):
         # ProcessRunner
         # ------------------------------------------
 
-        result = await self.process_runner.run(
-            command,
-            cwd=cwd,
-            timeout_seconds=timeout_seconds,
-            max_output_bytes=max_output_bytes,
-        )
+        sandbox_session = await self.sandbox.start(workspace=Workspace(cwd))
+        try:
+            result = await sandbox_session.run(
+                command,
+                timeout_seconds=timeout_seconds,
+                max_output_bytes=max_output_bytes,
+            )
+        finally:
+            await sandbox_session.stop()
 
         # ------------------------------------------
         # Timeout 属于领域错误
@@ -204,5 +233,12 @@ class BashTool(AgentTool):
                 "stderr": result.stderr,
                 "timed_out": result.timed_out,
                 "truncated": result.truncated,
+                "shell": "bash",
+                "command_policy": {
+                    "risk": policy_decision.risk.value,
+                    "decision": policy_decision.decision.value,
+                    "rule_id": policy_decision.rule_id,
+                },
+                "sandbox": sandbox_session.resource_policy.model_dump(mode="json"),
             },
         )
